@@ -1,0 +1,24 @@
+{
+  "apiName": "DisputeSentinel AI API",
+  "version": "1.0.0",
+  "description": "Autonomous Chargeback Defense & Visa Compelling Evidence 3.0 (CE3.0) Platform for PayPal Merchants",
+  "specPath": "../openapi.json",
+  "codegen": {
+    "languages": [
+      "python",
+      "typescript",
+      "go",
+      "csharp",
+      "java"
+    ],
+    "generateDocumentation": true,
+    "generateModelClasses": true,
+    "generateTestSuites": true
+  },
+  "portal": {
+    "title": "DisputeSentinel AI Developer Portal",
+    "theme": "dark",
+    "enableInteractiveDocs": true,
+    "enableCodeSnippets": true
+  }
+}
