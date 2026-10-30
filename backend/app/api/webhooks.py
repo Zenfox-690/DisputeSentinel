@@ -43,6 +43,11 @@ async def handle_paypal_webhook(
         webhook_id=paypal_client.webhook_id,
         raw_body_bytes=raw_body
     )
+    if not verified:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid PayPal webhook signature. Notification rejected without state modification."
+        )
 
     payload = json.loads(raw_body.decode("utf-8"))
     event_id = payload.get("id", paypal_transmission_id)
@@ -57,7 +62,7 @@ async def handle_paypal_webhook(
         event_type=event_type,
         resource_id=resource_id,
         raw_payload=payload,
-        processed_status="PROCESSED" if verified else "UNVERIFIED"
+        processed_status="PROCESSED"
     )
     db.add(evt_record)
 

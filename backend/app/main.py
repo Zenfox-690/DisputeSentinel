@@ -93,6 +93,7 @@ async def lifespan(app: FastAPI):
         if not existing_disp:
             disp_record = Dispute(
                 dispute_id=live_dispute_id,
+                merchant_id="merchant_default",
                 transaction_id=test_tx_id,
                 dispute_amount=Decimal("10.00"),
                 currency="USD",

@@ -11,6 +11,7 @@ class Dispute(Base):
     __tablename__ = "disputes"
 
     dispute_id = Column(String(64), primary_key=True)
+    merchant_id = Column(String(64), nullable=False, default="merchant_default", index=True)
     transaction_id = Column(String(64), nullable=False, index=True)
     dispute_amount = Column(Numeric(12, 2), nullable=False)
     currency = Column(String(3), nullable=False, default="USD")
@@ -48,10 +49,22 @@ class EvidencePackage(Base):
     narrative_text = Column(Text, nullable=False)
     telemetry_matches = Column(JSON, nullable=False)
     submission_payload = Column(JSON, nullable=False)
-    status = Column(String(32), nullable=False, default="DRAFT")  # DRAFT, SUBMITTED, REVIEW_REQUIRED, REJECTED
+    status = Column(String(32), nullable=False, default="DRAFT")  # DRAFT, APPROVED, SUBMITTED, REVIEW_REQUIRED, REJECTED
     confidence_score = Column(Numeric(4, 3), nullable=False)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MerchantApproval(Base):
+    __tablename__ = "merchant_approvals"
+
+    approval_id = Column(String(36), primary_key=True, default=generate_uuid)
+    dispute_id = Column(String(64), nullable=False, index=True)
+    package_id = Column(String(36), nullable=False, index=True)
+    content_hash = Column(String(64), nullable=False)
+    merchant_id = Column(String(64), nullable=False, index=True)
+    approved_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class WebhookEvent(Base):

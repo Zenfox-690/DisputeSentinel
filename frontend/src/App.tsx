@@ -31,6 +31,10 @@ interface Dossier {
 }
 
 const API_BASE = 'http://localhost:8000';
+const MERCHANT_HEADERS = {
+  'Authorization': 'Bearer merchant_token_default',
+  'X-Merchant-Id': 'merchant_default'
+};
 
 export default function App() {
   const [disputes, setDisputes] = useState<DisputeItem[]>([]);
@@ -96,10 +100,28 @@ export default function App() {
   const handleSubmitDefense = async () => {
     if (!selectedDispute) return;
     try {
-      const res = await fetch(`${API_BASE}/api/disputes/${selectedDispute.dispute_id}/submit-defense`, { method: 'POST' });
+      // Step 1: Explicit Server-Side Merchant Approval
+      const approveRes = await fetch(`${API_BASE}/api/disputes/${selectedDispute.dispute_id}/approve-evidence`, {
+        method: 'POST',
+        headers: MERCHANT_HEADERS
+      });
+      if (!approveRes.ok) {
+        const errData = await approveRes.json().catch(() => ({}));
+        setActionMessage(`Approval failed: ${errData.detail || 'Merchant authorization error'}`);
+        return;
+      }
+
+      // Step 2: Certified Defense Submission (backend verifies server-side approval record)
+      const res = await fetch(`${API_BASE}/api/disputes/${selectedDispute.dispute_id}/submit-defense`, {
+        method: 'POST',
+        headers: MERCHANT_HEADERS
+      });
       if (res.ok) {
-        setActionMessage('Evidence dossier certified and submitted to PayPal Disputes API.');
+        setActionMessage('Evidence dossier certified, approved by merchant, and submitted to PayPal Disputes API.');
         await fetchDisputes();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setActionMessage(`Submission failed: ${errData.detail || 'PayPal submission error'}`);
       }
     } catch (err) {
       console.error('Defense submission failed:', err);
@@ -109,11 +131,17 @@ export default function App() {
   const handleAdjudicate = async () => {
     if (!selectedDispute) return;
     try {
-      const res = await fetch(`${API_BASE}/api/adjudication/${selectedDispute.dispute_id}/resolve?outcome=SELLER_FAVOR`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/adjudication/${selectedDispute.dispute_id}/resolve?outcome=SELLER_FAVOR`, {
+        method: 'POST',
+        headers: MERCHANT_HEADERS
+      });
       if (res.ok) {
         setActionMessage('Dispute programmatically resolved in SELLER_FAVOR via Sandbox Adjudication API. Held funds released.');
         setSelectedDispute(prev => prev ? { ...prev, status: 'RESOLVED', adjudication_outcome: 'SELLER_FAVOR' } : null);
         await fetchDisputes();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setActionMessage(`Adjudication failed: ${errData.detail || 'Sandbox resolution error'}`);
       }
     } catch (err) {
       console.error('Adjudication failed:', err);

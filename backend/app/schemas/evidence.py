@@ -9,6 +9,14 @@ class TelemetryProof(BaseModel):
     match_value: str = Field(description="Exact value verified across both transactions")
 
 
+class EvidenceAttachment(BaseModel):
+    attachment_id: str = Field(description="Unique identifier for uploaded document")
+    filename: str = Field(description="Original file name e.g. delivery_receipt.pdf")
+    mime_type: str = Field(description="MIME type e.g. application/pdf")
+    sha256_hash: str = Field(description="SHA-256 cryptographic digest of document bytes")
+    size_bytes: int = Field(default=0, ge=0, description="File byte size")
+
+
 class EvidenceDossier(BaseModel):
     evidence_type: str = Field(
         default="PROOF_OF_FULFILLMENT",
@@ -22,6 +30,10 @@ class EvidenceDossier(BaseModel):
     historical_matches: List[TelemetryProof] = Field(
         default_factory=list,
         description="Prior undisputed transactions sharing core digital identifiers"
+    )
+    attachments: List[EvidenceAttachment] = Field(
+        default_factory=list,
+        description="Cryptographically hashed evidence documents"
     )
     formal_defense_narrative: str = Field(
         min_length=50,

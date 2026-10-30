@@ -6,13 +6,14 @@ from decimal import Decimal
 from datetime import datetime
 
 from backend.app.database import get_db
-from backend.app.models import Dispute, EvidencePackage, TransactionTelemetry
+from backend.app.models import Dispute, EvidencePackage, TransactionTelemetry, MerchantApproval
 from backend.app.schemas.dispute import DisputeResponse
 from backend.app.schemas.evidence import EvidenceDossier
 from backend.app.services.paypal_client import paypal_client
 from backend.app.services.ce30_engine import ce30_engine
 from backend.app.services.ai_synthesizer import ai_synthesizer
 from backend.app.services.validation_gates import validation_gates
+from backend.app.services.auth import get_current_merchant, MerchantContext, compute_canonical_submission_hash
 
 router = APIRouter(prefix="/api/disputes", tags=["Disputes"])
 
@@ -177,18 +178,96 @@ async def synthesize_dispute_evidence(
     return dossier
 
 
+@router.post("/{dispute_id}/approve-evidence")
+async def approve_dispute_evidence(
+    dispute_id: str,
+    current_merchant: MerchantContext = Depends(get_current_merchant),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Server-side merchant approval of a synthesized evidence package.
+    Records immutable approval record with merchant ID, dispute ID, package ID, and SHA-256 content hash.
+    """
+    dispute = await db.get(Dispute, dispute_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found in local ledger")
+
+    if dispute.merchant_id != current_merchant.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Merchant authorization mismatch. Cannot approve evidence for another merchant's dispute."
+        )
+
+    ev_res = await db.execute(
+        select(EvidencePackage).where(EvidencePackage.dispute_id == dispute_id).order_by(EvidencePackage.created_at.desc())
+    )
+    pkg = ev_res.scalars().first()
+    if not pkg:
+        raise HTTPException(status_code=400, detail="No synthesized evidence package found to approve. Call /synthesize first.")
+
+    payload_dict = pkg.submission_payload or {}
+    content_hash = compute_canonical_submission_hash(
+        dispute_id=dispute.dispute_id,
+        merchant_id=current_merchant.merchant_id,
+        evidence_type=pkg.evidence_type,
+        narrative_text=pkg.narrative_text,
+        carrier_name=payload_dict.get("carrier_name"),
+        tracking_number=payload_dict.get("tracking_number"),
+        delivery_date=payload_dict.get("delivery_date"),
+        compelling_evidence_factor=payload_dict.get("compelling_evidence_factor"),
+        attachments=payload_dict.get("attachments", [])
+    )
+
+    approval = MerchantApproval(
+        dispute_id=dispute_id,
+        package_id=pkg.package_id,
+        content_hash=content_hash,
+        merchant_id=current_merchant.merchant_id
+    )
+    pkg.status = "APPROVED"
+    db.add(approval)
+    await db.commit()
+
+    return {
+        "status": "APPROVED",
+        "approval_id": approval.approval_id,
+        "dispute_id": dispute_id,
+        "package_id": pkg.package_id,
+        "content_hash": content_hash,
+        "merchant_id": current_merchant.merchant_id,
+        "approved_at": approval.approved_at
+    }
+
+
 @router.post("/{dispute_id}/submit-defense")
 async def submit_defense_to_paypal(
     dispute_id: str,
+    current_merchant: MerchantContext = Depends(get_current_merchant),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Transmit the validated evidence dossier to PayPal's POST /v1/customer/disputes/{id}/provide-evidence.
+    Strictly enforces backend-recorded merchant approval matching the specific package content hash.
+    Client-supplied parameters cannot bypass or substitute for server-side approval.
     """
     dispute = await db.get(Dispute, dispute_id)
     if not dispute:
-        raise HTTPException(status_code=404, detail="Dispute not found")
+        raise HTTPException(status_code=404, detail="Dispute not found in local ledger")
 
+    if dispute.merchant_id != current_merchant.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Merchant authorization mismatch. Cannot submit evidence for another merchant's dispute."
+        )
+
+    # Status Gate: Must be waiting for seller response
+    if dispute.status != "WAITING_FOR_SELLER_RESPONSE":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dispute status is '{dispute.status}'. Evidence submission requires 'WAITING_FOR_SELLER_RESPONSE'."
+        )
+
+    # Fetch latest drafted evidence package
     ev_res = await db.execute(
         select(EvidencePackage).where(EvidencePackage.dispute_id == dispute_id).order_by(EvidencePackage.created_at.desc())
     )
@@ -196,11 +275,83 @@ async def submit_defense_to_paypal(
     if not pkg:
         raise HTTPException(status_code=400, detail="No synthesized evidence package found. Call /synthesize first.")
 
+    # 1. Server-Side Merchant Approval Verification
+    appr_res = await db.execute(
+        select(MerchantApproval)
+        .where(
+            MerchantApproval.dispute_id == dispute_id,
+            MerchantApproval.package_id == pkg.package_id,
+            MerchantApproval.revoked_at.is_(None)
+        )
+        .order_by(MerchantApproval.approved_at.desc())
+    )
+    approval = appr_res.scalars().first()
+    if not approval:
+        raise HTTPException(
+            status_code=400,
+            detail="Evidence dossier has not received valid server-side merchant approval. Approval required prior to submission."
+        )
+
+    if approval.merchant_id != current_merchant.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Merchant authorization mismatch on recorded approval."
+        )
+
+    # 2. Content Hash Parity Check (Ensures complete payload has not mutated since approval)
+    payload_dict = pkg.submission_payload or {}
+    current_hash = compute_canonical_submission_hash(
+        dispute_id=dispute.dispute_id,
+        merchant_id=current_merchant.merchant_id,
+        evidence_type=pkg.evidence_type,
+        narrative_text=pkg.narrative_text,
+        carrier_name=payload_dict.get("carrier_name"),
+        tracking_number=payload_dict.get("tracking_number"),
+        delivery_date=payload_dict.get("delivery_date"),
+        compelling_evidence_factor=payload_dict.get("compelling_evidence_factor"),
+        attachments=payload_dict.get("attachments", [])
+    )
+    if approval.content_hash != current_hash:
+        raise HTTPException(
+            status_code=400,
+            detail="Evidence package content has been modified since approval was recorded. Re-approval required."
+        )
+
+    # 3. PayPal Dispute HATEOAS & Evidence Request Verification
+    try:
+        paypal_details = await paypal_client.get_dispute(dispute_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to query dispute from PayPal: {str(e)}")
+
+    links = paypal_details.get("links", [])
+    has_action_link = any(link.get("rel") == "provide-evidence" for link in links)
+    if not has_action_link:
+        raise HTTPException(
+            status_code=400,
+            detail="Dispute does not offer an active 'provide-evidence' HATEOAS action link in PayPal."
+        )
+
+    # Validate evidence type against PayPal requested evidence types
+    evidence_requests = paypal_details.get("evidence_requests", [])
+    allowed_types = [
+        req.get("evidence_type") for req in evidence_requests if isinstance(req, dict) and req.get("evidence_type")
+    ]
+    if not allowed_types and "evidence_types" in paypal_details:
+        allowed_types = paypal_details.get("evidence_types", [])
+
+    if allowed_types and pkg.evidence_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Evidence type '{pkg.evidence_type}' is not among PayPal's requested evidence types: {allowed_types}"
+        )
+
     try:
         res = await paypal_client.provide_evidence(
             dispute_id=dispute_id,
             evidence_type=pkg.evidence_type,
-            notes=pkg.narrative_text
+            notes=pkg.narrative_text,
+            carrier_name=payload_dict.get("carrier_name"),
+            tracking_number=payload_dict.get("tracking_number")
         )
         pkg.status = "SUBMITTED"
         dispute.status = "UNDER_REVIEW"

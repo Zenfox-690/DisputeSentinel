@@ -6,6 +6,7 @@ from decimal import Decimal
 
 class DisputeBase(BaseModel):
     dispute_id: str
+    merchant_id: str = "merchant_default"
     transaction_id: str
     dispute_amount: Decimal
     currency: str = "USD"

@@ -49,7 +49,6 @@ async def test_validation_gates_success(db_session):
 
 @pytest.mark.asyncio
 async def test_validation_gate1_rejects_hallucinated_transaction(db_session):
-    # Dossier references a transaction that does NOT exist in telemetry
     dossier = EvidenceDossier(
         evidence_type="PROOF_OF_FULFILLMENT",
         compelling_evidence_factor="VISA_CE3.0_MULTI_FACTOR_MATCH",
