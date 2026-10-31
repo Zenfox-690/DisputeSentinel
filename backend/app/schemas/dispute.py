@@ -8,10 +8,14 @@ class DisputeBase(BaseModel):
     dispute_id: str
     merchant_id: str = "merchant_default"
     transaction_id: str
+    seller_transaction_id: Optional[str] = None
+    buyer_transaction_id: Optional[str] = None
     dispute_amount: Decimal
     currency: str = "USD"
     reason: str
     status: str
+    external_status: Optional[str] = None
+    workflow_status: Optional[str] = "PENDING_ACTION"
     lifecycle_stage: str
     response_due_date: Optional[datetime] = None
     adjudication_outcome: Optional[str] = None

@@ -53,6 +53,7 @@ async def test_client(db_session):
         carrier_tracking_number="1Z9999999999999999",
         delivery_status="DELIVERED",
         delivery_timestamp=datetime.now(timezone.utc),
+        provenance="SYNTHETIC_DEMO",
         timestamp=datetime.now(timezone.utc)
     )
     hist1 = TransactionTelemetry(
@@ -61,6 +62,7 @@ async def test_client(db_session):
         customer_email=buyer_email,
         ip_address=shared_ip,
         device_fingerprint=shared_device,
+        provenance="SYNTHETIC_DEMO",
         timestamp=datetime.now(timezone.utc) - timedelta(days=150)
     )
     hist2 = TransactionTelemetry(
@@ -69,18 +71,23 @@ async def test_client(db_session):
         customer_email=buyer_email,
         ip_address=shared_ip,
         device_fingerprint=shared_device,
+        provenance="SYNTHETIC_DEMO",
         timestamp=datetime.now(timezone.utc) - timedelta(days=200)
     )
     disp = Dispute(
         dispute_id="PP-R-PND-10195282",
         merchant_id="merchant_default",
-        transaction_id=test_tx_id,
+        transaction_id="6EH76875HL360672K",
+        seller_transaction_id="6EH76875HL360672K",
+        buyer_transaction_id=test_tx_id,
         dispute_amount=Decimal("10.00"),
         currency="USD",
         reason="MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
         status="WAITING_FOR_SELLER_RESPONSE",
+        external_status="WAITING_FOR_SELLER_RESPONSE",
+        workflow_status="PENDING_ACTION",
         lifecycle_stage="INQUIRY",
-        response_due_date=datetime(2026, 11, 19, 7, 24, tzinfo=timezone.utc)
+        response_due_date=datetime.fromisoformat("2026-11-19T11:24:01.788+00:00")
     )
     db_session.add_all([curr_tel, hist1, hist2, disp])
     await db_session.commit()
@@ -90,10 +97,15 @@ async def test_client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        yield ac
-
-    app.dependency_overrides.clear()
+    from backend.app.config import settings
+    orig_submission_setting = settings.ENABLE_LIVE_PAYPAL_SUBMISSION
+    settings.ENABLE_LIVE_PAYPAL_SUBMISSION = True
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            yield ac
+    finally:
+        settings.ENABLE_LIVE_PAYPAL_SUBMISSION = orig_submission_setting
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture

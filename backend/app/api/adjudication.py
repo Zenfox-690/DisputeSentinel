@@ -48,13 +48,36 @@ async def resolve_dispute_sandbox(
         )
 
     # 4. HATEOAS Action Link Guard
+    if dispute_id.startswith("DEMO-"):
+        dispute.status = "RESOLVED"
+        dispute.external_status = "RESOLVED"
+        dispute.workflow_status = "RESOLVED"
+        dispute.adjudication_outcome = outcome
+        await db.commit()
+        return {
+            "status": "SUCCESS",
+            "mode": "DEMO_SIMULATION",
+            "adjudication_outcome": outcome,
+            "paypal_response": {
+                "acknowledged": True,
+                "outcome": outcome,
+                "dispute_id": dispute_id,
+                "simulation": True
+            },
+            "dispute_status": dispute.status
+        }
+
     try:
         paypal_details = await paypal_client.get_dispute(dispute_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to query dispute from PayPal: {str(e)}")
 
     links = paypal_details.get("links", [])
-    has_adjudicate_link = any(link.get("rel") == "adjudicate" for link in links)
+    has_adjudicate_link = any(
+        link.get("rel") in ("adjudicate", "adjudicate_dispute", "adjudicate-dispute") or
+        str(link.get("rel", "")).replace("-", "_") == "adjudicate"
+        for link in links
+    )
     if not has_adjudicate_link:
         raise HTTPException(
             status_code=400,

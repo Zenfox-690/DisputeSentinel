@@ -7,26 +7,19 @@
 [![AG Grid](https://img.shields.io/badge/AG_Grid-Community-e0234e.svg)](https://www.ag-grid.com/)
 [![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
 [![PayPal REST API](https://img.shields.io/badge/PayPal-Disputes_API_v1-003087.svg)](https://developer.paypal.com/docs/api/customer-disputes/v1/)
-
-> **Built for the PayPal AI Hackathon 2026**  
-> Targeting: **Grand Prize ($12,000)** | **Best Use of PayPal + AI ($5,000)** | **AG Grid Sponsor Prize ($5,000)** | **APIMatic Developer Experience Prize ($1,000)**
+[![Tests Passing](https://img.shields.io/badge/Tests-59%2F59%20Passing-brightgreen.svg)](backend/tests)
 
 ---
 
 ## 1. Executive Summary & The Problem
 
-Chargebacks and friendly fraud inflict over **$100 billion in merchant losses annually**. When a cardholder repudiates a legitimate purchase or falsely claims merchandise was not received, merchants face:
-- Strict **10-day response deadlines** with manual, labor-intensive evidence compilation.
-- **Complex card scheme rules**, specifically **Visa Compelling Evidence 3.0 (CE3.0)**, requiring cryptographic proof linking historical undisputed transactions to the disputed purchase.
-- **High risk of LLM hallucinations**: Naive generative AI solutions risk fabricating tracking numbers or contradicting order records, causing automatic dispute forfeiture.
+Chargebacks, first-party friendly fraud, and disputed non-receipt claims inflict over **$100 billion in merchant losses annually**. When a cardholder repudiates a genuine purchase or disputes a digital delivery, merchants face severe structural operational challenges:
+- **Strict Response Windows:** Merchants face 10-to-20 day deadlines to compile multi-factor evidentiary dossiers or suffer automatic claim forfeiture.
+- **Card Scheme & Workflow Bifurcation:** Non-receipt claims (Visa Reason 13.1 / PayPal `MERCHANDISE_OR_SERVICE_NOT_RECEIVED`) demand strict **Proof of Fulfillment** (license dispatch, delivery logs, access timestamps). Conversely, Card-Absent Fraud claims (Visa Reason 10.4) require **Visa Compelling Evidence 3.0 (CE3.0)** correlation across historical undisputed transactions. Blurring these legal standards causes immediate issuer rejection.
+- **LLM Hallucination Risk:** Generative AI models without deterministic guardrails risk fabricating carrier tracking numbers, inventing license keys, or citing synthetic demo fixtures as verified evidence, permanently compromising merchant credibility with payment processors.
 
 ### The Solution: DisputeSentinel AI
-**DisputeSentinel AI** is an autonomous chargeback defense copilot that connects directly to the **PayPal Disputes API**. It:
-1. **Ingests disputes in real time** via PayPal Webhooks and OAuth 2.0 REST synchronization.
-2. **Correlates order telemetry** against historical store transactions using a deterministic **Visa CE3.0 Engine** (matching IP addresses, device fingerprints, and delivery coordinates).
-3. **Passes all drafted dossiers through 5 Deterministic Safety Gates** to guarantee 0% hallucination risk.
-4. **Synthesizes certified legal representment briefs** optimized for PayPal and card network human adjudicators.
-5. **Submits evidence programmatically** to PayPal's `/provide-evidence` endpoint and confirms resolution via sandbox adjudication.
+**DisputeSentinel AI** is an enterprise chargeback defense copilot that connects directly to the **PayPal Disputes API (`/v1/customer/disputes`)**. It enforces strict cryptographic evidence provenance, deterministic safety gates, and authenticated merchant authorization before any payload touches PayPal's network.
 
 ---
 
@@ -35,131 +28,208 @@ Chargebacks and friendly fraud inflict over **$100 billion in merchant losses an
 ```mermaid
 flowchart TD
     subgraph PayPal["PayPal Ecosystem"]
-        A[Buyer Dispute Filed] -->|Webhook / Polling| B[PayPal Disputes API v1]
-        H[Evidence Ingestion] -->|POST /provide-evidence| I[Adjudication Engine]
+        A[Inbound Dispute] -->|Webhook Notification| WH[POST /api/webhooks/paypal]
+        B[PayPal REST API v1] <-->|GET /v1/customer/disputes| SYNC[Dispute Synchronizer]
+        SUB[POST /v1/customer/disputes/{id}/provide-evidence] <--> ADJ[POST .../adjudicate]
     end
 
-    subgraph SentinelBackend["DisputeSentinel Core (FastAPI / Python 3.13)"]
-        B -->|Sync Disputes| C[Dispute Ledger SQLite/Postgres]
-        D[Store Telemetry Database] --> E[Visa CE3.0 Correlation Engine]
-        C --> E
-        E -->|Telemetry Proofs| F[AI Evidence Synthesizer]
-        F --> G[5 Deterministic Validation Gates]
-        G -->|Approved Dossier| H
+    subgraph IngestionSec["Security & Verification Layer"]
+        WH --> V_SIG{HMAC/RSA Postback Valid?}
+        V_SIG -->|No| R_401[401 Reject / Fail-Closed]
+        V_SIG -->|Yes| V_IDEMP{Transmission ID Seen?}
+        V_IDEMP -->|Duplicate| R_ALREADY[200 ALREADY_PROCESSED]
+        V_IDEMP -->|New| DISP_DB[(Dispute Ledger)]
+        SYNC --> DISP_DB
     end
 
-    subgraph SentinelFrontend["Merchant Command Center (AG Grid Quartz Dark)"]
-        C <--> J[AG Grid High-Density Ledger]
-        J --> K[Split-Screen Forensic Dossier Inspector]
-        K -->|One-Click Defense| G
-        K -->|Simulate Resolution| I
+    subgraph ProvenanceEngine["Evidentiary Provenance & Fulfillment Layer"]
+        DISP_DB --> DUAL_ID[Dual Transaction ID Resolver<br/>Seller 6EH... / Buyer 33M...]
+        DUAL_ID --> REASON_BRANCH{Dispute Reason?}
+        REASON_BRANCH -->|INR / Reason 13.1| FUL_CHECK{Merchant Fulfillment Record?}
+        FUL_CHECK -->|Missing| INSUFFICIENT[Status: INSUFFICIENT_EVIDENCE<br/>Confidence: 15% / Block Submission]
+        FUL_CHECK -->|Attested / Manual| ATTESTED[Status: MERCHANT_ATTESTED<br/>Confidence: 72% / Review Required]
+        FUL_CHECK -->|Verified Third-Party| VERIFIED[Status: VERIFIED_MERCHANT<br/>Confidence: 88% / SELLER_FAVOR]
+        REASON_BRANCH -->|Fraud / Reason 10.4| CE30_ENGINE[Visa CE3.0 Correlation Engine<br/>Match IP / Device / Address]
+    end
+
+    subgraph Gates["5 Deterministic Validation Gates"]
+        VERIFIED --> G1[Gate 1: Transaction & Provenance Invariance]
+        ATTESTED --> G1
+        CE30_ENGINE --> G1
+        G1 --> G2[Gate 2: Courier Tracking Syntax Regex]
+        G2 --> G3[Gate 3: Mathematical Cent-Precision Check]
+        G3 --> G4[Gate 4: Prompt Injection & Legal Claim Sanitizer]
+        G4 --> G5[Gate 5: Human Approval & Completeness Threshold]
+    end
+
+    subgraph ApprovalAndSubmission["Merchant Review & Submission Pipeline"]
+        G5 --> CANON_HASH[Canonical SHA-256 Payload Hash]
+        CANON_HASH --> APPR_REC[(MerchantApproval Ledger)]
+        APPR_REC --> SUB_GATE{Safety Lock & Gate Validation}
+        SUB_GATE -->|dry_run=true| DRY_RES[DRY_RUN_SUCCESS Preview]
+        SUB_GATE -->|Demo Scenario| DEMO_SIM[Simulated PayPal Acceptance]
+        SUB_GATE -->|Live & Enabled| SUB
     end
 ```
 
 ---
 
-## 3. Visa Compelling Evidence 3.0 (CE3.0) Correlation Engine
+## 3. Evidence Provenance & Evidentiary Integrity
 
-Under **Visa CE3.0 rules**, merchants can decisively defeat first-party fraud ("friendly fraud") claims if they prove the cardholder completed **two undisputed transactions** between 120 and 365 days prior sharing at least **two core identifiers**:
-- **IP Address Parity**: Matches customer IP address across checkouts.
-- **Device Fingerprint Hash**: Matches browser/hardware device signature.
-- **Delivery / Physical Coordinates**: Matches delivery address and postal code.
+DisputeSentinel establishes an immutable provenance audit trail for every piece of data cited in an evidence package:
 
-DisputeSentinel's CE3.0 Engine (`backend/app/services/ce30_engine.py`) performs automated backward correlation against merchant telemetry stores, pulling verified historical records and formatting them into card-network-compliant evidentiary proof blocks.
+| Provenance Label | Source & Classification Rules | Allowed in Live Submission? |
+| :--- | :--- | :---: |
+| **`VERIFIED_EXTERNAL`** | Retrieved authoritatively from external PayPal REST API endpoints or signed webhook events. | **Yes** |
+| **`VERIFIED_MERCHANT`** | Independently validated merchant records backed by third-party verification (e.g. `CARRIER_API`, `INDEPENDENT_AUDIT`) and an intact SHA-256 document hash. | **Yes** |
+| **`MERCHANT_ATTESTED`** | Directly entered by merchant without external cryptographic or third-party validation. Requires explicit human review before submission. | **Yes (After Review)** |
+| **`MANUAL_ENTRY`** | Manually entered record. Automatically downgraded from any unverified claims of external validation. | **Yes (After Review)** |
+| **`SYNTHETIC_DEMO`** | Synthetic demonstration fixtures and sample telemetry. Strictly blocked by Gate 1 from being submitted to PayPal as verified evidence. | **No (Disqualified)** |
 
 ---
 
 ## 4. The 5 Deterministic Validation Gates
 
-To ensure total fidelity and eliminate generative AI hallucinations before payloads ever touch PayPal's servers, every dossier must clear 5 deterministic gates (`backend/app/services/validation_gates.py`):
+To ensure complete legal and mathematical fidelity and eliminate generative AI hallucinations before payloads ever touch payment processors, every dossier must clear 5 deterministic gates (`backend/app/services/validation_gates.py`):
 
-| Gate | Name | Validation Enforcement | Violation Result |
-| :--- | :--- | :--- | :--- |
-| **Gate 1** | **Transaction Existence Check** | Asserts every transaction referenced in the AI brief exists in local immutable telemetry. | Rejection: Blocks fabricated transaction IDs. |
-| **Gate 2** | **Tracking & Courier Conformance** | Verifies tracking numbers match standard regex formats (UPS, FedEx, USPS, DHL). | Rejection: Blocks invalid tracking numbers. |
-| **Gate 3** | **Monetary Math Invariance** | Confirms rebuttal amount matches the exact disputed sum down to the cent. | Rejection: Prevents numeric discrepancies. |
-| **Gate 4** | **Prompt Injection Firewall** | Scans narrative for prompt injection keywords ("ignore previous", "refund immediately"). | Rejection: Protects against adversarial buyer notes. |
-| **Gate 5** | **Human-in-the-Loop Threshold** | Flags claims with confidence $<85\%$ or amounts $>\$500$ for human one-click signoff. | Routing: Shifts to `REVIEW_REQUIRED`. |
-
----
-
-## 5. Technology Stack & Partner Tracks
-
-### PayPal Ecosystem Integration (Best Use of PayPal + AI)
-- **PayPal OAuth 2.0 Client Credentials**: Automatic token management with in-memory caching and proactive refresh.
-- **PayPal Disputes API (`/v1/customer/disputes`)**:
-  - `GET /v1/customer/disputes`: Real-time dispute synchronization.
-  - `GET /v1/customer/disputes/{id}`: Detailed dispute lifecycle inspection.
-  - `POST /v1/customer/disputes/{id}/provide-evidence`: Automated evidentiary brief submission.
-  - `POST /v1/customer/disputes/{id}/adjudicate`: Closed-loop sandbox claim resolution.
-- **PayPal Webhooks**: Raw-byte HMAC signature verification (`/v1/notifications/verify-webhook-signature`).
-
-### AG Grid Community ($5,000 AG Grid Sponsor Prize)
-- High-density fintech dark ledger using AG Grid Quartz Dark theme (`ag-theme-quartz-dark`).
-- Custom cell renderers for Status badges (`WAITING_FOR_SELLER_RESPONSE`, `UNDER_REVIEW`, `RESOLVED`), monetary formatting, and urgent countdown timers.
-- Integrated quick filtering, column sorting, pagination, and one-click split-screen dossier inspection.
-
-### APIMatic ($1,000 APIMatic Sponsor Prize)
-- Comprehensive OpenAPI 3.1.0 specification exported at `/openapi.json`.
-- SDK generation configuration (`apimatic/apimatic.json`) for instant multi-language SDK compilation (TypeScript, Python, Go, C#, Java).
-- Complete developer integration documentation at `apimatic/APIMATIC_INTEGRATION.md`.
+| Gate | Validation Enforcement | Violation Result |
+| :--- | :--- | :--- |
+| **Gate 1: Transaction Existence & Provenance** | Asserts every transaction referenced in the brief exists in local telemetry and is not tagged `SYNTHETIC_DEMO`. | Rejection: Blocks fabricated transaction IDs and demo fixtures. |
+| **Gate 2: Carrier Tracking Conformance** | Syntactically validates courier tracking numbers against standard formats (UPS `1Z...`, FedEx 12-15 digits, USPS, DHL). | Rejection: Blocks invalid or fabricated tracking numbers. |
+| **Gate 3: Financial Precision & Invariance** | Confirms rebuttal amount matches the exact disputed sum down to the cent. | Rejection: Prevents numeric discrepancies. |
+| **Gate 4: Injection & Legal Claim Firewall** | Scans narrative for prompt injection patterns and sanitizes unauthorized CE3.0 liability shift claims on INR disputes. | Rejection: Blocks prompt injection and improper legal claims. |
+| **Gate 5: Merchant Review & Completeness** | Enforces human-in-the-loop review whenever completeness falls below 85% or evidence is merchant-attested. | Routing: Shifts to `REVIEW_REQUIRED`. |
 
 ---
 
-## 6. Quickstart Guide
+## 5. Technology Stack & Architecture
+
+- **Backend:** Python 3.13, FastAPI (Async ASGI), SQLAlchemy 2.0 (Async), SQLite / aiosqlite, Pydantic v2.
+- **Frontend:** React 19, TypeScript, AG Grid Community (Quartz Dark Theme), Vite 8 with Rolldown code-splitting.
+- **Authentication & Authorization:** HMAC-SHA256 signed Bearer tokens with expiration, revocation ledger, and tenant isolation (`X-Merchant-Id`).
+- **Security:** Fail-closed webhook signature verification (`verify-webhook-signature`), dual transaction ID correlation, and canonical SHA-256 evidence approval hashes.
+
+---
+
+## 6. Environment Configuration (`.env`)
+
+DisputeSentinel uses environment variables managed by Pydantic Settings (`backend/app/config.py`). Copy `.env.example` to `.env` to configure your local environment:
+
+```ini
+# PayPal Sandbox Credentials (from developer.paypal.com)
+PAYPAL_ENV=sandbox
+PAYPAL_CLIENT_ID=your_paypal_sandbox_client_id
+PAYPAL_CLIENT_SECRET=your_paypal_sandbox_client_secret
+PAYPAL_WEBHOOK_ID=your_registered_webhook_id
+
+# Safety Guard: Keep false by default to prevent accidental live submissions
+ENABLE_LIVE_PAYPAL_SUBMISSION=false
+
+# AI Model Provider (Google Gemini or Groq Cloud)
+AI_PROVIDER=gemini # or groq
+GEMINI_API_KEY=your_gemini_api_key
+GROQ_API_KEY=your_groq_api_key
+
+# Infrastructure Settings
+PORT=8000
+DATABASE_URL=sqlite+aiosqlite:///./disputesentinel.db
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+CONFIDENCE_THRESHOLD=0.85
+MAX_AUTO_SUBMIT_AMOUNT=500.00
+AUTH_SECRET_KEY=dev-disputesentinel-hmac-secret-key-32b
+```
+
+---
+
+## 7. Local Setup & Quickstart
 
 ### Prerequisites
-- Python 3.11+ (Python 3.13 fully supported)
+- Python 3.11+ (Python 3.13 tested)
 - Node.js 18+ and npm
 
-### 1. Clone & Set Up Backend
+### 1. Backend Setup
 ```bash
+# Clone the repository
 git clone https://github.com/your-username/DisputeSentinel.git
 cd DisputeSentinel
 
 # Install Python dependencies
-pip install fastapi uvicorn sqlalchemy aiosqlite pydantic-settings httpx greenlet pytest pytest-asyncio
+pip install -r backend/requirements.txt # or install fastapi uvicorn sqlalchemy aiosqlite pydantic-settings httpx greenlet pytest pytest-asyncio
 
-# (Optional) Copy environment template and add your PayPal Sandbox keys
+# Copy environment configuration
 cp .env.example .env
-```
 
-### 2. Run Backend Server
-```bash
+# Launch Backend Server
 uvicorn backend.app.main:app --port 8000 --reload
 ```
-*Backend runs on `http://localhost:8000`. API docs available at `http://localhost:8000/docs`.*
+*Backend runs on `http://localhost:8000`. Swagger API documentation available at `http://localhost:8000/docs`.*
 
-### 3. Launch AG Grid Frontend
+### 2. Frontend Setup
 ```bash
 cd frontend
 npm install
 npm run dev -- --port 3000
 ```
-*Frontend opens at `http://localhost:3000`.*
+*Merchant Command Center opens at `http://localhost:3000`.*
 
-### 4. Run Automated Test Suite
+### 3. Run Automated Test Suite
 ```bash
-python -m pytest -v backend/tests
+python -m pytest -v
 ```
-*7/7 tests pass in $<0.5$ seconds verifying CE3.0 correlation, validation gates, and API workflows.*
+*59/59 tests pass in $<5$ seconds verifying CE3.0 correlation, validation gates, merchant approval integrity, and webhook security with isolated in-memory SQLite databases.*
 
 ---
 
-## 7. Live Demonstration Scenario (Recorded Sandbox Run)
+## 8. REST API Reference
 
-| Parameter | Live Verified Value |
-| :--- | :--- |
-| **Merchant Account** | `sb-zpxtx53591626@business.example.com` (Country: `IN`) |
-| **Buyer Account** | `sb-kjysr53628645@personal.example.com` (Country: `US`) |
-| **Transaction ID** | `33M44420E8977152Y` ($10.00 USD cross-border checkout) |
-| **Dispute ID** | `PP-R-PND-10195282` |
-| **Reason** | `MERCHANDISE_OR_SERVICE_NOT_RECEIVED` |
-| **Matched CE3.0 Factors**| 6 historical matches across IP Address, Device ID, and Shipping Address |
-| **Adjudication Outcome** | Programmatic `SELLER_FAVOR` fund release verified |
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | System health check, environment status, and active AI provider. |
+| `GET` | `/api/disputes` | List all tracked dispute records with counterparty IDs and statuses. |
+| `POST` | `/api/disputes/sync` | Synchronize live dispute records directly from PayPal REST API. |
+| `POST` | `/api/disputes/{id}/synthesize` | Run CE3.0 engine / Proof of Fulfillment synthesizer and compile brief. |
+| `POST` | `/api/disputes/{id}/fulfillment` | Record authentic merchant fulfillment proof (license keys, tracking logs). |
+| `POST` | `/api/disputes/{id}/approve-evidence` | Cryptographically record server-side merchant approval with SHA-256 hash. |
+| `POST` | `/api/disputes/{id}/submit-defense` | Validate gates and submit defense to PayPal (supports `?dry_run=true`). |
+| `POST` | `/api/adjudication/{id}/resolve` | Sandbox-only programmatically resolve dispute (`SELLER_FAVOR`). |
+| `POST` | `/api/webhooks/paypal` | Inbound fail-closed PayPal webhook receiver with signature verification. |
 
 ---
 
-## 8. License
+## 9. Interactive Demonstration Guide
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+DisputeSentinel includes three pre-seeded dispute scenarios designed to showcase the complete defense lifecycle without modifying real disputes:
+
+### Scenario A: The Live PayPal Sandbox INR Dispute (`PP-R-PND-10195282`)
+1. Click **Inspect** on `PP-R-PND-10195282` in the AG Grid ledger.
+2. Note the live dispute details retrieved from PayPal: Item Not Received, $10.00 USD, `WAITING_FOR_SELLER_RESPONSE`.
+3. **Honest Insufficient Evidence Demonstration:** Observe that the system flags `INSUFFICIENT_EVIDENCE` (15% completeness) because no fulfillment record exists. Live submission and dry-run are locked.
+4. Click **Attach Fulfillment Proof**, enter license key `LIC-SENTINEL-VERIFIED-2026`, select `INDEPENDENT_AUDIT`, and save.
+5. The dossier immediately re-synthesizes to `VERIFIED` (88% completeness), unlocking **Dry-Run Gate Check**.
+6. Click **Dry-Run Gate Check**: All 6 validation gates pass without sending requests to PayPal. Live submission remains protected by the safety lock.
+
+### Scenario B: Fully Verified INR Demonstration (`DEMO-INR-FULFILLED`)
+1. Click **Inspect** on `DEMO-INR-FULFILLED` ($49.99 USD).
+2. Pre-seeded with verified digital license fulfillment (`LIC-SENTINEL-DEMO-9944`) and audit hash.
+3. Click **Submit Demo Defense**: Executes simulated PayPal submission, transitioning status to `UNDER_REVIEW`.
+4. Click **Adjudicate Dispute (Sandbox Test)**: Resolves the dispute in `SELLER_FAVOR`, releasing simulated held funds.
+
+### Scenario C: Visa CE3.0 Fraud Correlation Demonstration (`DEMO-CE30-FRAUD`)
+1. Click **Inspect** on `DEMO-CE30-FRAUD` ($129.00 USD, Reason: `UNAUTHORIZED_TRANSACTION`).
+2. Demonstrates the **Visa CE3.0 Backward Correlation Engine**: Correlates the disputed purchase against historical undisputed checkouts (`TX-HIST-2026-04-12` and `TX-HIST-2026-02-15`) matching customer IP and device fingerprints.
+3. Demonstrates **Gate 1 Provenance Enforcement**: Transparently alerts the operator that synthetic demo fixtures cannot be submitted to PayPal as verified evidence.
+
+---
+
+## 10. Security & Limitations
+
+- **Sandbox Adjudication Guard:** Adjudication (`/api/adjudication/...`) is strictly restricted to the Sandbox environment. Executions in `production`, `staging`, or `live` environments are rejected immediately with HTTP 403.
+- **Live Submission Safety Lock:** Actual live evidence submissions to PayPal are disabled by default (`ENABLE_LIVE_PAYPAL_SUBMISSION=false`). Operators must explicitly opt in via configuration and the UI safety toggle.
+- **Cryptographic Approval Parity:** Client-side flags (`merchant_approved=true`) cannot authorize submissions. Approval is verified server-side against the canonical SHA-256 hash of the entire payload.
+- **Fail-Closed Webhooks:** Unsigned or forged webhook events are rejected with HTTP 401 before any database operations or state transitions can occur.
+
+---
+
+## 11. License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.

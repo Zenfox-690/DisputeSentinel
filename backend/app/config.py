@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD: float = 0.85
     MAX_AUTO_SUBMIT_AMOUNT: float = 500.00
     AUTH_SECRET_KEY: str = "dev-disputesentinel-hmac-secret-key-32b"
+    ENABLE_LIVE_PAYPAL_SUBMISSION: bool = False
 
     @property
     def paypal_base_url(self) -> str:

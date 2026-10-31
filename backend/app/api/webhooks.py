@@ -28,12 +28,7 @@ async def handle_paypal_webhook(
     """
     raw_body: bytes = await request.body()
 
-    # Step 1: Idempotency Check
-    existing_evt = await db.get(WebhookEvent, paypal_transmission_id)
-    if existing_evt:
-        return {"status": "ALREADY_PROCESSED", "transmission_id": paypal_transmission_id}
-
-    # Step 2: Cryptographic Signature Verification
+    # Step 1: Cryptographic Signature Verification (Fail-closed: reject before any DB operations)
     verified = await paypal_client.verify_webhook_signature(
         transmission_id=paypal_transmission_id,
         transmission_time=paypal_transmission_time,
@@ -54,6 +49,22 @@ async def handle_paypal_webhook(
     event_type = payload.get("event_type", "UNKNOWN")
     resource = payload.get("resource", {})
     resource_id = resource.get("id") or resource.get("dispute_id", "UNKNOWN")
+
+    # Step 2: Idempotency Check (Check transmission_id and event_id)
+    existing_evt = await db.get(WebhookEvent, paypal_transmission_id)
+    if not existing_evt and event_id:
+        evt_res = await db.execute(
+            select(WebhookEvent).where(WebhookEvent.event_id == event_id)
+        )
+        existing_evt = evt_res.scalars().first()
+
+    if existing_evt:
+        return {
+            "status": "ALREADY_PROCESSED",
+            "idempotent": True,
+            "transmission_id": paypal_transmission_id,
+            "event_id": event_id
+        }
 
     # Record in idempotency ledger
     evt_record = WebhookEvent(
@@ -79,29 +90,55 @@ async def handle_paypal_webhook(
         due_date = datetime.fromisoformat(due_str.replace("Z", "+00:00")) if due_str else None
 
         disputed_txs = resource.get("disputed_transactions", [])
-        tx_id = disputed_txs[0].get("seller_transaction_id") or disputed_txs[0].get("buyer_transaction_id") if disputed_txs else "TX-UNKNOWN"
+        seller_tx = disputed_txs[0].get("seller_transaction_id") if disputed_txs else None
+        buyer_tx = disputed_txs[0].get("buyer_transaction_id") if disputed_txs else None
+        tx_id = seller_tx or buyer_tx or "TX-UNKNOWN"
 
-        new_disp = Dispute(
-            dispute_id=dispute_id,
-            transaction_id=tx_id,
-            dispute_amount=amount,
-            currency=curr,
-            reason=reason,
-            status=status,
-            lifecycle_stage=stage,
-            response_due_date=due_date
-        )
-        db.add(new_disp)
+        existing = await db.get(Dispute, dispute_id)
+        if existing:
+            existing.status = status
+            existing.external_status = status
+            existing.lifecycle_stage = stage
+            existing.response_due_date = due_date
+            if seller_tx:
+                existing.seller_transaction_id = seller_tx
+            if buyer_tx:
+                existing.buyer_transaction_id = buyer_tx
+            if not existing.transaction_id or existing.transaction_id == "TX-UNKNOWN":
+                existing.transaction_id = tx_id
+        else:
+            new_disp = Dispute(
+                dispute_id=dispute_id,
+                transaction_id=tx_id,
+                seller_transaction_id=seller_tx,
+                buyer_transaction_id=buyer_tx,
+                dispute_amount=amount,
+                currency=curr,
+                reason=reason,
+                status=status,
+                external_status=status,
+                workflow_status="PENDING_ACTION",
+                lifecycle_stage=stage,
+                response_due_date=due_date
+            )
+            db.add(new_disp)
 
     elif event_type in ("CUSTOMER.DISPUTE.UPDATED", "CUSTOMER.DISPUTE.RESOLVED"):
         dispute_id = resource.get("dispute_id")
         disp = await db.get(Dispute, dispute_id)
         if disp:
-            disp.status = resource.get("status", disp.status)
+            new_status = resource.get("status", disp.status)
+            disp.status = new_status
+            disp.external_status = new_status
             disp.lifecycle_stage = resource.get("dispute_life_cycle_stage", disp.lifecycle_stage)
+            due_str = resource.get("seller_response_due_date")
+            if due_str:
+                disp.response_due_date = datetime.fromisoformat(due_str.replace("Z", "+00:00"))
             outcome = resource.get("dispute_outcome", {}).get("outcome_code")
             if outcome:
                 disp.adjudication_outcome = outcome
+            if new_status == "RESOLVED":
+                disp.workflow_status = "RESOLVED"
 
     await db.commit()
 

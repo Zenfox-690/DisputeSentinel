@@ -7,16 +7,21 @@ from backend.app.config import settings
 
 
 class PayPalClient:
-    def __init__(self):
+    def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None):
         self.base_url = settings.paypal_base_url
-        self.client_id = settings.PAYPAL_CLIENT_ID
-        self.client_secret = settings.PAYPAL_CLIENT_SECRET
+        self.client_id = client_id or settings.PAYPAL_CLIENT_ID
+        self.client_secret = client_secret or settings.PAYPAL_CLIENT_SECRET
         self.webhook_id = settings.PAYPAL_WEBHOOK_ID
         self._cached_token: Optional[str] = None
         self._token_expires_at: float = 0.0
 
     async def get_access_token(self) -> str:
         """Fetch or refresh OAuth 2.0 Bearer access token."""
+        if not self.client_id or not self.client_secret:
+            raise RuntimeError(
+                "PayPal API credentials not configured (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET). "
+                "Cannot perform OAuth authentication."
+            )
         now = time.time()
         if self._cached_token and now < (self._token_expires_at - 60):
             return self._cached_token
@@ -68,35 +73,10 @@ class PayPalClient:
     async def get_dispute(self, dispute_id: str) -> Dict[str, Any]:
         """Fetch comprehensive details, lifecycle stage, and HATEOAS links for a specific dispute."""
         if not self.client_id or not self.client_secret:
-            # Deterministic simulation matching PayPal REST API structure
-            return {
-                "dispute_id": dispute_id,
-                "status": "WAITING_FOR_SELLER_RESPONSE",
-                "dispute_life_cycle_stage": "INQUIRY",
-                "evidence_requests": [
-                    {
-                        "evidence_type": "PROOF_OF_FULFILLMENT",
-                        "request_source": "PAYPAL",
-                    }
-                ],
-                "links": [
-                    {
-                        "href": f"{self.base_url}/v1/customer/disputes/{dispute_id}/provide-evidence",
-                        "rel": "provide-evidence",
-                        "method": "POST"
-                    },
-                    {
-                        "href": f"{self.base_url}/v1/customer/disputes/{dispute_id}/adjudicate",
-                        "rel": "adjudicate",
-                        "method": "POST"
-                    },
-                    {
-                        "href": f"{self.base_url}/v1/customer/disputes/{dispute_id}",
-                        "rel": "self",
-                        "method": "GET"
-                    }
-                ]
-            }
+            raise RuntimeError(
+                "PayPal API credentials not configured (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET). "
+                "Silent fallback to simulated data is disabled."
+            )
         headers = await self._get_auth_headers()
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(
@@ -116,13 +96,10 @@ class PayPalClient:
     ) -> Dict[str, Any]:
         """Submit formal evidentiary brief and courier tracking to PayPal Disputes API."""
         if not self.client_id or not self.client_secret:
-            return {
-                "acknowledged": True,
-                "status": "EVIDENCE_SUBMITTED",
-                "dispute_id": dispute_id,
-                "evidence_type": evidence_type,
-                "mode": "SIMULATED_SANDBOX"
-            }
+            raise RuntimeError(
+                "PayPal API credentials not configured (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET). "
+                "Silent fallback to simulated data is disabled."
+            )
         headers = await self._get_auth_headers()
         payload: Dict[str, Any] = {
             "evidence_type": evidence_type,
@@ -160,12 +137,10 @@ class PayPalClient:
             raise ValueError("Dispute adjudication is strictly disallowed in production environment.")
 
         if not self.client_id or not self.client_secret:
-            return {
-                "adjudication_outcome": adjudication_outcome,
-                "dispute_id": dispute_id,
-                "status": "RESOLVED",
-                "mode": "SIMULATED_SANDBOX"
-            }
+            raise RuntimeError(
+                "PayPal API credentials not configured (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET). "
+                "Silent fallback to simulated data is disabled."
+            )
         headers = await self._get_auth_headers()
         payload = {"adjudication_outcome": adjudication_outcome}
 
