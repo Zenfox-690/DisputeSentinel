@@ -9,8 +9,8 @@ from backend.app.config import settings
 class PayPalClient:
     def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None):
         self.base_url = settings.paypal_base_url
-        self.client_id = client_id or settings.PAYPAL_CLIENT_ID
-        self.client_secret = client_secret or settings.PAYPAL_CLIENT_SECRET
+        self.client_id = settings.PAYPAL_CLIENT_ID if client_id is None else client_id
+        self.client_secret = settings.PAYPAL_CLIENT_SECRET if client_secret is None else client_secret
         self.webhook_id = settings.PAYPAL_WEBHOOK_ID
         self._cached_token: Optional[str] = None
         self._token_expires_at: float = 0.0

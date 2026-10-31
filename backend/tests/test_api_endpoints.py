@@ -84,11 +84,12 @@ async def test_webhook_rejected_on_invalid_signature(test_client, db_session):
             "disputed_transactions": [{"seller_transaction_id": "TX_FORGED"}]
         }
     }
-    res = await test_client.post(
-        "/api/webhooks/paypal",
-        headers=headers,
-        content=json.dumps(payload).encode("utf-8")
-    )
+    with patch("backend.app.api.webhooks.paypal_client.verify_webhook_signature", return_value=False):
+        res = await test_client.post(
+            "/api/webhooks/paypal",
+            headers=headers,
+            content=json.dumps(payload).encode("utf-8")
+        )
     assert res.status_code == 401
     assert "Invalid PayPal webhook signature" in res.json()["detail"]
 
@@ -118,11 +119,12 @@ async def test_webhook_accepted_on_valid_signature(test_client, db_session):
             "disputed_transactions": [{"seller_transaction_id": "TX_VALID"}]
         }
     }
-    res = await test_client.post(
-        "/api/webhooks/paypal",
-        headers=headers,
-        content=json.dumps(payload).encode("utf-8")
-    )
+    with patch("backend.app.api.webhooks.paypal_client.verify_webhook_signature", return_value=True):
+        res = await test_client.post(
+            "/api/webhooks/paypal",
+            headers=headers,
+            content=json.dumps(payload).encode("utf-8")
+        )
     assert res.status_code == 200
     assert res.json()["status"] == "ACCEPTED"
 
@@ -965,27 +967,28 @@ async def test_webhook_idempotency_duplicate_notification_ignored(test_client, d
             "disputed_transactions": [{"seller_transaction_id": "TX_IDEMP_001"}]
         }
     }
-    # Initial webhook notification
-    res1 = await test_client.post(
-        "/api/webhooks/paypal",
-        headers=headers,
-        content=json.dumps(payload).encode("utf-8")
-    )
-    assert res1.status_code == 200
-    assert res1.json()["status"] == "ACCEPTED"
+    with patch("backend.app.api.webhooks.paypal_client.verify_webhook_signature", return_value=True):
+        # Initial webhook notification
+        res1 = await test_client.post(
+            "/api/webhooks/paypal",
+            headers=headers,
+            content=json.dumps(payload).encode("utf-8")
+        )
+        assert res1.status_code == 200
+        assert res1.json()["status"] == "ACCEPTED"
 
-    # Verify event stored once in database
-    events = (await db_session.execute(
-        select(WebhookEvent).where(WebhookEvent.transmission_id == "trans_idemp_100")
-    )).scalars().all()
-    assert len(events) == 1
+        # Verify event stored once in database
+        events = (await db_session.execute(
+            select(WebhookEvent).where(WebhookEvent.transmission_id == "trans_idemp_100")
+        )).scalars().all()
+        assert len(events) == 1
 
-    # Second notification with identical transmission ID and payload
-    res2 = await test_client.post(
-        "/api/webhooks/paypal",
-        headers=headers,
-        content=json.dumps(payload).encode("utf-8")
-    )
+        # Second notification with identical transmission ID and payload
+        res2 = await test_client.post(
+            "/api/webhooks/paypal",
+            headers=headers,
+            content=json.dumps(payload).encode("utf-8")
+        )
     assert res2.status_code == 200
     data2 = res2.json()
     assert data2["status"] == "ALREADY_PROCESSED"
@@ -1018,42 +1021,43 @@ async def test_webhook_dispute_updated_and_resolved_lifecycle(test_client, db_se
             "seller_response_due_date": "2026-11-25T12:00:00Z"
         }
     }
-    res_upd = await test_client.post(
-        "/api/webhooks/paypal",
-        headers=headers,
-        content=json.dumps(update_payload).encode("utf-8")
-    )
-    assert res_upd.status_code == 200
-    assert res_upd.json()["status"] == "ACCEPTED"
+    with patch("backend.app.api.webhooks.paypal_client.verify_webhook_signature", return_value=True):
+        res_upd = await test_client.post(
+            "/api/webhooks/paypal",
+            headers=headers,
+            content=json.dumps(update_payload).encode("utf-8")
+        )
+        assert res_upd.status_code == 200
+        assert res_upd.json()["status"] == "ACCEPTED"
 
-    # Verify dispute state in DB reflects UPDATE
-    disp = await db_session.get(Dispute, "PP-R-PND-10195282")
-    assert disp.status == "UNDER_REVIEW"
-    assert disp.external_status == "UNDER_REVIEW"
-    assert disp.lifecycle_stage == "CHARGEBACK"
+        # Verify dispute state in DB reflects UPDATE
+        disp = await db_session.get(Dispute, "PP-R-PND-10195282")
+        assert disp.status == "UNDER_REVIEW"
+        assert disp.external_status == "UNDER_REVIEW"
+        assert disp.lifecycle_stage == "CHARGEBACK"
 
-    # Send RESOLVED event
-    resolve_headers = {
-        **headers,
-        "paypal-transmission-id": "trans_lifecycle_202"
-    }
-    resolve_payload = {
-        "id": "WH-EVT-RESOLVE-001",
-        "event_type": "CUSTOMER.DISPUTE.RESOLVED",
-        "resource": {
-            "dispute_id": "PP-R-PND-10195282",
-            "status": "RESOLVED",
-            "dispute_life_cycle_stage": "RESOLVED",
-            "dispute_outcome": {
-                "outcome_code": "RESOLVED_SELLER_FAVOUR"
+        # Send RESOLVED event
+        resolve_headers = {
+            **headers,
+            "paypal-transmission-id": "trans_lifecycle_202"
+        }
+        resolve_payload = {
+            "id": "WH-EVT-RESOLVE-001",
+            "event_type": "CUSTOMER.DISPUTE.RESOLVED",
+            "resource": {
+                "dispute_id": "PP-R-PND-10195282",
+                "status": "RESOLVED",
+                "dispute_life_cycle_stage": "RESOLVED",
+                "dispute_outcome": {
+                    "outcome_code": "RESOLVED_SELLER_FAVOUR"
+                }
             }
         }
-    }
-    res_res = await test_client.post(
-        "/api/webhooks/paypal",
-        headers=resolve_headers,
-        content=json.dumps(resolve_payload).encode("utf-8")
-    )
+        res_res = await test_client.post(
+            "/api/webhooks/paypal",
+            headers=resolve_headers,
+            content=json.dumps(resolve_payload).encode("utf-8")
+        )
     assert res_res.status_code == 200
     assert res_res.json()["status"] == "ACCEPTED"
 

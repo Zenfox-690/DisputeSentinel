@@ -10,6 +10,23 @@ from backend.app.main import app
 from backend.app.models import Dispute, TransactionTelemetry
 
 
+@pytest.fixture(autouse=True)
+def isolate_paypal_credentials(monkeypatch):
+    """
+    Isolate PayPal credentials during test runs to prevent test suites from picking up
+    placeholder or environment credentials and executing external network calls.
+    """
+    from backend.app.config import settings
+    from backend.app.services.paypal_client import paypal_client
+
+    monkeypatch.setattr(settings, "PAYPAL_CLIENT_ID", "")
+    monkeypatch.setattr(settings, "PAYPAL_CLIENT_SECRET", "")
+    monkeypatch.setattr(settings, "PAYPAL_WEBHOOK_ID", "")
+    monkeypatch.setattr(paypal_client, "client_id", "")
+    monkeypatch.setattr(paypal_client, "client_secret", "")
+    monkeypatch.setattr(paypal_client, "webhook_id", "")
+
+
 @pytest.fixture
 async def db_session():
     test_engine = create_async_engine(
